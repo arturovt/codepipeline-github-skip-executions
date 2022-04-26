@@ -1,0 +1,8 @@
+dist
+node_modules
+.serverless
+.build
+yarn-error.log
+jspm_packages
+.webpack
+.DS_Store

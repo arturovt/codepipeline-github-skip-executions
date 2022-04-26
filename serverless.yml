@@ -1,0 +1,110 @@
+service: codepipeline-github-skip-executions
+
+frameworkVersion: 3
+
+provider:
+  name: aws
+  runtime: nodejs14.x
+  memorySize: 256
+  endpointType: regional
+  deploymentBucket:
+    name: ${param:s3Bucket}
+  httpApi:
+    cors: true
+
+functions:
+  triggerPipeline:
+    handler: src/trigger-pipeline.triggerPipeline
+    role: TriggerPipelineLambdaRole
+    events:
+      - httpApi: 'POST /webhook'
+    environment:
+      PIPELINE_NAME: ${param:pipelineName}
+      GITHUB_BRANCH: ${param:githubBranch}
+      WATCHED_FILES: ${param:watchedFiles}
+
+  setupWebhook:
+    handler: src/setup-webhook.setupWebhook
+    role: SetupWebhookLambdaRole
+    environment:
+      GITHUB_USER: ${param:githubUser}
+      GITHUB_REPOSITORY: ${param:githubRepository}
+      SSM_HOOK_ID_PARAMETER_NAME: ${param:ssmHookIdParameterName}
+      WEBHOOK_URL: !Join ["", ["https://", !Ref HttpApi, ".execute-api.", !Ref AWS::Region, ".", !Ref AWS::URLSuffix, "/webhook"]]
+
+plugins:
+  - serverless-webpack
+  - serverless-offline
+
+custom:
+  webpack:
+    packager: yarn
+
+resources:
+  Resources:
+    TriggerPipelineLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        RetentionInDays: 1
+
+    TriggerPipelineLambdaRole:
+      Type: AWS::IAM::Role
+      Properties:
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: sts:AssumeRole
+              Principal:
+                Service: lambda.amazonaws.com
+        Policies:
+          - PolicyName: trigger-pipeline-lambda
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: codepipeline:StartPipelineExecution
+                  Resource: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${param:pipelineName}
+
+    SetupWebhookLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        RetentionInDays: 1
+
+    SetupWebhook:
+      Type: Custom::SetupWebhook
+      Properties:
+        ServiceToken: !GetAtt SetupWebhookLambdaFunction.Arn
+
+    SetupWebhookLambdaRole:
+      Type: AWS::IAM::Role
+      Properties:
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: sts:AssumeRole
+              Principal:
+                Service: lambda.amazonaws.com
+        Policies:
+          - PolicyName: setup-webhook-lambda-ssm
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - ssm:PutParameter
+                    - ssm:GetParameter
+                    - ssm:DeleteParameter
+                  Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${param:ssmHookIdParameterName}
+          - PolicyName: setup-webhook-lambda-get-secret
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:GithubOAuthToken*

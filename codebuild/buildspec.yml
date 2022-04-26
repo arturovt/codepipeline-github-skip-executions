@@ -1,0 +1,6 @@
+version: 0.2
+
+phases:
+  build:
+    commands:
+      - printf "The buildspec might be a placed in another repository.\n"
